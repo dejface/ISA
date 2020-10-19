@@ -66,9 +66,9 @@ void processPacket(u_char* args, const struct pcap_pkthdr* header, const u_char*
 
     if (ntohs(ethernet_header->ether_type) == ETHERTYPE_IPV6) {     // if ETHERTYPE is IPV6, flag is set to true
         ipv6 = true;
-    }
+    } else ipv6 = false;
 
-    /*if (ipv6) {
+    if (ipv6) {
         const struct ip6_hdr* ipv6Hdr;
         ipv6Hdr = (struct ip6_hdr*)(buffer + sizeof(struct ethhdr));
         int protocol = ipv6Hdr->ip6_nxt;
@@ -77,17 +77,17 @@ void processPacket(u_char* args, const struct pcap_pkthdr* header, const u_char*
             printTCP(buffer, userArgs.currentPacketSize, header);
         }
 
-    } else {*/
+    } else {
 
         switch (iph->protocol) //Check the Protocol and do accordingly...
         {
         case 6:  //TCP Protocol
-            printTCP(buffer, userArgs.currentPacketSize,header);
+            printTCP(buffer, userArgs.currentPacketSize, header);
             //break;
 
         default:
             break;
-        //}
+        }
     }
 }
 
@@ -165,14 +165,27 @@ string getTimestamp(const u_char* Buffer, int Size, string state, const struct p
  */
 
 string getSource(const u_char* Buffer, size_t Size){
-    struct iphdr* iph = (struct iphdr*)(Buffer + sizeof(struct ethhdr));
-    unsigned short iphdrlen = iph->ihl * 4;
-    
-    memset(&source, 0, sizeof(source));
-    source.sin_addr.s_addr = iph->saddr;
-    source.sin_family = AF_INET;
+    if (!ipv6) {
+        struct iphdr* iph = (struct iphdr*)(Buffer + sizeof(struct ethhdr));
+        unsigned short iphdrlen = iph->ihl * 4;
+        
+        memset(&source, 0, sizeof(source));
+        source.sin_addr.s_addr = iph->saddr;
+        source.sin_family = AF_INET;
 
-    return inet_ntoa(source.sin_addr);
+        return inet_ntoa(source.sin_addr);
+    } else {
+        const struct ip6_hdr* ipv6Hdr = (struct ip6_hdr*)(Buffer + sizeof(struct ethhdr));
+        unsigned short ip6hdrlen = 5 * 8;
+
+        memset(&source, 0, sizeof(source));
+        sourceIPV6.sin6_addr = ipv6Hdr->ip6_src;
+        sourceIPV6.sin6_family = AF_INET6;
+        char srcIPV6[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &(ipv6Hdr->ip6_src), srcIPV6, INET6_ADDRSTRLEN);
+        srcIPV6[INET6_ADDRSTRLEN] = '\0';
+        return srcIPV6;
+    }
 }
 
 /**
@@ -180,13 +193,26 @@ string getSource(const u_char* Buffer, size_t Size){
  */
 
 string getDest(const u_char* Buffer, size_t Size){
-    struct iphdr* iph = (struct iphdr*)(Buffer + sizeof(struct ethhdr));
-    unsigned short iphdrlen = iph->ihl * 4;
+    if (!ipv6) {
+        struct iphdr* iph = (struct iphdr*)(Buffer + sizeof(struct ethhdr));
+        unsigned short iphdrlen = iph->ihl * 4;
 
-    memset(&dest, 0, sizeof(dest));
-    dest.sin_addr.s_addr = iph->daddr;
-    dest.sin_family = AF_INET;
-    return inet_ntoa(dest.sin_addr);
+        memset(&dest, 0, sizeof(dest));
+        dest.sin_addr.s_addr = iph->daddr;
+        dest.sin_family = AF_INET;
+        return inet_ntoa(dest.sin_addr);
+    } else {
+        const struct ip6_hdr* ipv6Hdr = (struct ip6_hdr*)(Buffer + sizeof(struct ethhdr));
+        unsigned short ip6hdrlen = 5 * 8;
+
+        memset(&dest, 0, sizeof(dest));
+        destIPV6.sin6_addr = ipv6Hdr->ip6_dst;
+        destIPV6.sin6_family = AF_INET6;
+        char dstIPV6[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &(ipv6Hdr->ip6_dst), dstIPV6, INET6_ADDRSTRLEN);
+        dstIPV6[INET6_ADDRSTRLEN] = '\0';
+        return dstIPV6;
+    }
 }
 
 /**
@@ -220,12 +246,20 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
     unsigned short iphdrlen = iph->ihl * 4;
     struct tcphdr* tcph = (struct tcphdr*)(Buffer + iphdrlen + sizeof(struct ethhdr));
 
+    const struct ip6_hdr* ipv6Hdr = (struct ip6_hdr*)(Buffer + sizeof(struct ethhdr));
+    unsigned short ip6hdrlen = 5 * 8;   // ipv6hdrlen
+    struct tcphdr* tcph6 = (struct tcphdr*)(Buffer + ip6hdrlen + sizeof(struct ethhdr));
+
     const u_char* temp = Buffer;    //storing our buffer to temporary var
-    int headerLen = tcph->doff * 4 + iphdrlen + 14;           //skip headers of Ethernet/ip/tcp
+    int headerLen;
+    if (ipv6) {
+        headerLen = tcph6->doff * 4 + ip6hdrlen + 14;
+    } else headerLen = tcph->doff * 4 + iphdrlen + 14;           //skip headers of Ethernet/ip/tcp
     Buffer += headerLen;
     size_t len;
     size_t pos = TLS_HEADER_LEN;
 
+    if (ipv6) tcph = tcph6;
     //ending a connection if TCP FIN flag is included in packet
     if (tcph->fin) {
         if (Size < TLS_HEADER_LEN){
@@ -250,7 +284,7 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
     if (Size < TLS_HEADER_LEN){
         return -1;
     }
-    if(ntohs(tcph->source) == 59120 || ntohs(tcph->dest) == 59120){
+    if(ntohs(tcph->source) == 45546 || ntohs(tcph->dest) == 45546){
         int a = 1;
     }
     switch (Buffer[0]){
@@ -267,7 +301,7 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                             ci.timestamp = getTimestamp(temp, Size, "actual", header);
                             ci.countOfPackets = 1;
                             ci.handshakeMade = false;
-                            if(ntohs(tcph->source) == 50280 || ntohs(tcph->dest) == 50280){
+                            if(ntohs(tcph->source) == 45546 || ntohs(tcph->dest) == 45546){
                                         int a = 1;
                                     }
                             ci.finCount = 0;
@@ -575,8 +609,12 @@ void printTCP(const u_char* Buffer, int Size, const struct pcap_pkthdr* header) 
     const struct ip6_hdr* ipv6Hdr = (struct ip6_hdr*)(Buffer + sizeof(struct ethhdr));
     unsigned short ip6hdrlen = 5 * 8;   // ipv6hdrlen
     struct tcphdr* tcph6 = (struct tcphdr*)(Buffer + ip6hdrlen + sizeof(struct ethhdr));
-
-    Size = Size - tcph->doff * 4 - iphdrlen - 14;
+    
+    if (ipv6){
+        Size = Size - tcph6->doff * 4 - ip6hdrlen - 14;
+    } else {
+        Size = Size - tcph->doff * 4 - iphdrlen - 14;
+    }
 
     parseTLS(Buffer, Size, header);
     /*char finalBuf[2048];
@@ -680,8 +718,8 @@ int main(int argc, char** argv){
         pcap_loop(dev, 0, processPacket, NULL);
         pcap_close(dev);
     } else if (!userArgs.interfaceSet && userArgs.fileSet){
-        //pcap_t* dev = pcap_open_offline(userArgs.file, error);
-        pcap_t* dev = pcap_open_offline("/home/student/Desktop/isa/hardcore.pcapng", error);
+        pcap_t* dev = pcap_open_offline(userArgs.file, error);
+       // pcap_t* dev = pcap_open_offline("/home/student/Desktop/isa/random.pcapng", error);
         if (!dev) {
             fprintf(stderr, "Opening of device %s wasn't successful. Error: %s \n", userArgs.interface, error);
             return EXIT_FAILURE;
