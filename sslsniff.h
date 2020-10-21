@@ -29,6 +29,7 @@ using namespace std;
 #endif
 
 #define TLS_HEADER_LEN 5
+#define SIZEOF_IPV6_HDR 40
 
 /* struct which holds user params from commandline */
 struct userArgs {
@@ -36,23 +37,22 @@ struct userArgs {
     const char* file;
     string ipClient, ipServer;
     int currentPacketSize;
-    bool interfaceSet;
-    bool fileSet;
+    bool interfaceSet, fileSet, showDevices;
 } userArgs;
 
 typedef struct connectionInfo {
     string ipClient, ipServer, timestamp, hostname;
-    double sec,usec;
+    long sec,usec;
     unsigned srcPort, dstPort;
-    bool handshakeMadeClient, handshakeMade, wasHere;
-    int countOfPackets, length, finCount;
+    bool handshakeMadeClient, handshakeMade,dontWrite;
+    int countOfPackets, length, finCount, ackCount, synCount;
 } connectionInfo;
 
 void initStruct();
 int parseArgs(int argc, char** argv);
 void processPacket(u_char* args, const struct pcap_pkthdr* header, const u_char* buffer);
 string getTimestamp(const u_char* Buffer, int Size, string state);
-void printTCP(const u_char* Buffer, int Size, const struct pcap_pkthdr* header);
+void processTCP(const u_char* Buffer, int Size, const struct pcap_pkthdr* header);
 static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr* header);
 static int parse_extension(const uint8_t *Buffer, size_t Size, unsigned srcPort, unsigned dstPort);
 static int parse_server_name_extension(const uint8_t *Buffer, size_t Size, unsigned srcPort, unsigned dstPort);
