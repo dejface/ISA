@@ -36,25 +36,18 @@ int parseArgs(int argc, char** argv) {
         case 'r':
             userArgs.file = optarg;
             userArgs.fileSet = true;
-            //printf("%s", userArgs.file);
             break;
         case ':':
-            printf("%d",opt);
-            //printf("%d", optopt);
+            break;
 
         default:
+            userArgs.showDevices = true;
+            if (optopt == 105) break;
             fprintf(stderr, "Wrong parameter!\n");
             return 1;
         }
     }
-    if (!userArgs.interfaceSet && !userArgs.fileSet){
-        printf("SSL sniffer\n"
-               "Usage: sudo ./sslsniff [-i interface] [-r file]\n"
-               "-i interface - sniffer will listen on this interface\n"
-               "-r file - file in pcapng format\n"
-               "no options - shows this help\n");
-        return 1;
-    } else return 0;
+    return 0;
 }
 
 void processPacket(u_char* args, const struct pcap_pkthdr* header, const u_char* buffer) {
@@ -74,21 +67,37 @@ void processPacket(u_char* args, const struct pcap_pkthdr* header, const u_char*
         int protocol = ipv6Hdr->ip6_nxt;
 
         if (protocol == 6) {            //TCP protocol
-            printTCP(buffer, userArgs.currentPacketSize, header);
+            processTCP(buffer, userArgs.currentPacketSize, header);
         }
 
     } else {
 
-        switch (iph->protocol) //Check the Protocol and do accordingly...
+        switch (iph->protocol) 
         {
         case 6:  //TCP Protocol
-            printTCP(buffer, userArgs.currentPacketSize, header);
-            //break;
-
-        default:
-            break;
+            processTCP(buffer, userArgs.currentPacketSize, header);
         }
     }
+}
+
+/* Function which prints header of IPK project and TCP packet*/
+void processTCP(const u_char* Buffer, int Size, const struct pcap_pkthdr* header) {
+
+    struct iphdr* iph = (struct iphdr*)(Buffer + sizeof(struct ethhdr));
+    unsigned short iphdrlen = iph->ihl * 4;
+    struct tcphdr* tcph = (struct tcphdr*)(Buffer + iphdrlen + sizeof(struct ethhdr));
+
+    const struct ip6_hdr* ipv6Hdr = (struct ip6_hdr*)(Buffer + sizeof(struct ethhdr));
+    unsigned short ip6hdrlen = 5 * 8;   // ipv6hdrlen
+    struct tcphdr* tcph6 = (struct tcphdr*)(Buffer + ip6hdrlen + sizeof(struct ethhdr));
+    
+    if (ipv6){
+        Size = Size - tcph6->doff * 4 - ip6hdrlen - 14;
+    } else {
+        Size = Size - tcph->doff * 4 - iphdrlen - 14;
+    }
+
+    parseTLS(Buffer, Size, header);
 }
 
 /* Function which get a timestamp forms it for output and also stores
@@ -106,58 +115,20 @@ string getTimestamp(const u_char* Buffer, int Size, string state, const struct p
     time_t nowtime;
     struct tm* nowtm;
 
-    //gettimeofday(&tv, NULL);
     nowtime = header->ts.tv_sec;
     nowtm = localtime(&header->ts.tv_sec);
 
     if (state == "actual"){
-        ci.sec = (header->ts.tv_sec * 1000 + header->ts.tv_usec/1000.0);
+       ci.sec = header->ts.tv_sec;
+       ci.usec = header->ts.tv_usec;
     } else if (state == "last"){
-        secLast =  (header->ts.tv_sec * 1000 + header->ts.tv_usec/1000.0);
-
+        secLast = header->ts.tv_sec;
+        usecLast = header->ts.tv_usec;
     }
 
     strftime(tempBuf, sizeof(tempBuf), "%Y-%m-%d %H:%M:%S", nowtm);          // time is written to tempBuf
     snprintf(buf, sizeof(buf), "%s.%06ld,", tempBuf, header->ts.tv_usec);    // appending microseconds to tempBuf and storing it in buf
-    return buf;
-
-    /* Getting hostname for ipv6 IP address */
-   /* if (ipv6) {
-        memset(&source, 0, sizeof(source));
-        sourceIPV6.sin6_addr = ipv6Hdr->ip6_src;
-
-        memset(&dest, 0, sizeof(dest));
-        destIPV6.sin6_addr = ipv6Hdr->ip6_dst;
-
-        sourceIPV6.sin6_family = AF_INET6;
-        destIPV6.sin6_family = AF_INET6;
-
-        addrIPV6 = sourceIPV6.sin6_addr;
-        addrIPV6_2 = destIPV6.sin6_addr;
-
-        snprintf(tempBuf, sizeof(tempBuf), "%s", buf);
-        memset(buf, 0, sizeof(buf));
-
-        if (he = (gethostbyaddr((const void*)&addrIPV6, sizeof(addrIPV6), AF_INET6)))
-            snprintf(buf, sizeof(buf), "%s %s :", tempBuf, he->h_name);
-        else {
-            char srcIPV6[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET6, &(ipv6Hdr->ip6_src), srcIPV6, INET6_ADDRSTRLEN);
-            snprintf(buf, sizeof(buf), "%s %s :", tempBuf, srcIPV6);
-        }
-
-        he = 0;
-        memset(tempBuf, 0, sizeof(tempBuf));
-
-        if (he = (gethostbyaddr((const void*)&addrIPV6_2, sizeof(addrIPV6_2), AF_INET6)))
-            snprintf(tempBuf, sizeof(tempBuf), "%s :", he->h_name);
-        else {
-            char dstIPV6[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET6, &(ipv6Hdr->ip6_dst), dstIPV6, INET6_ADDRSTRLEN);
-            snprintf(tempBuf, sizeof(tempBuf), "%s :", dstIPV6);
-        }
-
-    }*/
+    return buf;   
 }
 
 /**
@@ -167,7 +138,7 @@ string getTimestamp(const u_char* Buffer, int Size, string state, const struct p
 string getSource(const u_char* Buffer, size_t Size){
     if (!ipv6) {
         struct iphdr* iph = (struct iphdr*)(Buffer + sizeof(struct ethhdr));
-        unsigned short iphdrlen = iph->ihl * 4;
+        unsigned short iphdrlen = sizeof(iph);
         
         memset(&source, 0, sizeof(source));
         source.sin_addr.s_addr = iph->saddr;
@@ -176,7 +147,7 @@ string getSource(const u_char* Buffer, size_t Size){
         return inet_ntoa(source.sin_addr);
     } else {
         const struct ip6_hdr* ipv6Hdr = (struct ip6_hdr*)(Buffer + sizeof(struct ethhdr));
-        unsigned short ip6hdrlen = 5 * 8;
+        unsigned short ip6hdrlen = sizeof(ip6hdrlen);
 
         memset(&source, 0, sizeof(source));
         sourceIPV6.sin6_addr = ipv6Hdr->ip6_src;
@@ -195,7 +166,7 @@ string getSource(const u_char* Buffer, size_t Size){
 string getDest(const u_char* Buffer, size_t Size){
     if (!ipv6) {
         struct iphdr* iph = (struct iphdr*)(Buffer + sizeof(struct ethhdr));
-        unsigned short iphdrlen = iph->ihl * 4;
+        unsigned short iphdrlen = sizeof(iph);
 
         memset(&dest, 0, sizeof(dest));
         dest.sin_addr.s_addr = iph->daddr;
@@ -203,7 +174,8 @@ string getDest(const u_char* Buffer, size_t Size){
         return inet_ntoa(dest.sin_addr);
     } else {
         const struct ip6_hdr* ipv6Hdr = (struct ip6_hdr*)(Buffer + sizeof(struct ethhdr));
-        unsigned short ip6hdrlen = 5 * 8;
+        unsigned short ip6hdrlen = sizeof(ip6hdrlen);
+        //printf("%d\n",ip6hdrlen);
 
         memset(&dest, 0, sizeof(dest));
         destIPV6.sin6_addr = ipv6Hdr->ip6_dst;
@@ -220,19 +192,24 @@ string getDest(const u_char* Buffer, size_t Size){
  */
 void endConnection(unsigned port, string lastTimestamp, struct tcphdr* tcph, const u_char* temp, size_t Size){
     for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-       /*if (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-            ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort){  */ 
-            if (iterator->finCount == 2){
-                double resultusec = secLast - iterator->sec;
+            if (iterator->finCount == 2 && iterator->handshakeMade){
+                if (iterator->dontWrite) continue;
+                long resultSec = secLast - iterator->sec;
+                long resultUsec = usecLast - iterator->usec;
+                if (resultUsec < 0){
+                    resultUsec = 1000000 + usecLast - iterator->usec;
+                    resultSec -= 1;
+                }
                 char tmpbf[100] = {0};
-                snprintf(tmpbf, sizeof(tmpbf), "%.6f",resultusec/1000);
+                snprintf(tmpbf, sizeof(tmpbf), "%ld.%06ld", resultSec, resultUsec);
                 string final = iterator->timestamp + iterator->ipClient + "," + to_string(iterator->srcPort) + "," + 
                         iterator->ipServer + "," + iterator->hostname + "," + to_string(iterator->length) + "," + 
                         to_string(iterator->countOfPackets) + "," + tmpbf; 
                 printf("%s\n", final.c_str());
                 listOfconn.erase(iterator);
                 return;
-            //}
+        } else if (iterator->finCount == 2 && !iterator->handshakeMade){
+            iterator->dontWrite = true;
         }
     }
 }
@@ -260,8 +237,44 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
     size_t pos = TLS_HEADER_LEN;
 
     if (ipv6) tcph = tcph6;
-    //ending a connection if TCP FIN flag is included in packet
-    if (tcph->fin) {
+    if (tcph->syn && !tcph->ack && !tcph->fin) { 
+        ci.srcPort = ntohs(tcph->source);
+        ci.dstPort = ntohs(tcph->dest);
+        ci.ipClient = getSource(temp,Size);
+        ci.ipServer = getDest(temp,Size);
+        ci.timestamp = getTimestamp(temp, Size, "actual", header);
+        ci.handshakeMade = false;
+        ci.handshakeMadeClient = false;
+        ci.countOfPackets = 1;
+        listOfconn.push_back(ci);
+    } else if (tcph->syn && tcph->ack && !tcph->fin){
+        for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+            if (((getSource(temp,Size) == iterator->ipClient && 
+                ntohs(tcph->source) == iterator->srcPort) &&
+                (getDest(temp,Size) == iterator->ipServer &&
+                ntohs(tcph->dest) == iterator->dstPort)) || 
+                ((getSource(temp,Size) == iterator->ipServer && 
+                ntohs(tcph->source) == iterator->dstPort) &&
+                (getDest(temp,Size) == iterator->ipClient &&
+                ntohs(tcph->dest) == iterator->srcPort))){
+                    iterator->countOfPackets += 1;
+
+            }
+        }
+    } else if (!tcph->syn && tcph->ack && !tcph->fin){
+        for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+            if (((getSource(temp,Size) == iterator->ipClient && 
+                ntohs(tcph->source) == iterator->srcPort) &&
+                (getDest(temp,Size) == iterator->ipServer &&
+                ntohs(tcph->dest) == iterator->dstPort)) || 
+                ((getSource(temp,Size) == iterator->ipServer && 
+                ntohs(tcph->source) == iterator->dstPort) &&
+                (getDest(temp,Size) == iterator->ipClient &&
+                ntohs(tcph->dest) == iterator->srcPort))){
+                    iterator->countOfPackets += 1;
+            }
+        }
+    } else if (tcph->fin) {
         if (Size < TLS_HEADER_LEN){
             for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
                 if (((getSource(temp,Size) == iterator->ipClient && 
@@ -273,56 +286,62 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                     (getDest(temp,Size) == iterator->ipClient &&
                     ntohs(tcph->dest) == iterator->srcPort))){
                     iterator->finCount++;
+                    iterator->countOfPackets += 1;
                     break;
                 }
             } 
             string lastTimestamp = getTimestamp(temp, Size, "last", header);
             endConnection(ntohs(tcph->source), lastTimestamp, tcph, temp, Size);
         }
+    } else {
+        for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+            if (((getSource(temp,Size) == iterator->ipClient && 
+                ntohs(tcph->source) == iterator->srcPort) &&
+                (getDest(temp,Size) == iterator->ipServer &&
+                ntohs(tcph->dest) == iterator->dstPort)) || 
+                ((getSource(temp,Size) == iterator->ipServer && 
+                ntohs(tcph->source) == iterator->dstPort) &&
+                (getDest(temp,Size) == iterator->ipClient &&
+                ntohs(tcph->dest) == iterator->srcPort))){
+                iterator->countOfPackets += 1;
+                break;
+            }
+        }
     }
+    //ending a connection if TCP FIN flag is included in packet
+    
 
     if (Size < TLS_HEADER_LEN){
         return -1;
     }
-    if(ntohs(tcph->source) == 45546 || ntohs(tcph->dest) == 45546){
-        int a = 1;
-    }
+
     switch (Buffer[0]){
         case 0x16:
             if (Buffer[1] == 0x03){
                 if (Buffer[2] == 0x00 || Buffer[2] == 0x01 || Buffer[2] == 0x02
                     || Buffer[2] == 0x03 || Buffer[2] == 0x04){
                         if (Buffer[5] == 0x01){
-                            ci.srcPort = ntohs(tcph->source);
-                            ci.dstPort = ntohs(tcph->dest);
-                            ci.ipClient = getSource(temp,Size);
-                            ci.ipServer = getDest(temp,Size);
-                            ci.length = (ntohs(Buffer[3]) + Buffer[4]);
-                            ci.timestamp = getTimestamp(temp, Size, "actual", header);
-                            ci.countOfPackets = 1;
-                            ci.handshakeMade = false;
-                            if(ntohs(tcph->source) == 45546 || ntohs(tcph->dest) == 45546){
-                                        int a = 1;
-                                    }
-                            ci.finCount = 0;
-                            ci.wasHere = false;
-                            len = (ntohs(Buffer[3]) + Buffer[4]);
-                            listOfconn.push_back(ci);
+                            for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+                                if (((getSource(temp,Size) == iterator->ipClient && 
+                                    ntohs(tcph->source) == iterator->srcPort) &&
+                                    (getDest(temp,Size) == iterator->ipServer &&
+                                    ntohs(tcph->dest) == iterator->dstPort))){
+                                    iterator->length = (ntohs(Buffer[3]) + Buffer[4]);
+                                    iterator->handshakeMadeClient = true;
+                                }
+                            } 
                         } else if (Buffer[5] == 0x02) {
                             for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
                                 if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
                                     ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
                                     (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
                                     ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-                                    if(ntohs(tcph->source) == 59120 || ntohs(tcph->dest) == 59120){
-                                        int a = 1;
+                                    if (iterator->handshakeMadeClient){
+                                        iterator->handshakeMade = true;
+                                        iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
+                                        len = (ntohs(Buffer[3]) + Buffer[4]);
                                     }
-                                    iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
-                                    iterator->countOfPackets += 1;
-                                    iterator->handshakeMade = true;
-                                    len = (ntohs(Buffer[3]) + Buffer[4]);
-                                    break;
-                                
+                                    break;  
                                 }
                             }
                         } else {
@@ -332,47 +351,28 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                                     (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
                                     ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
                                     if (iterator->handshakeMade){
-                                    if(ntohs(tcph->source) == 50280 || ntohs(tcph->dest) == 50280){
-                                        int a = 1;
-                                    }
-                                        if (iterator->wasHere) iterator->wasHere = false;
                                         iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
-                                        iterator->countOfPackets += 1;
                                         len = (ntohs(Buffer[3]) + Buffer[4]);
                                     }
                                 } 
                             }
                         }
-                       /* for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                            if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-                                    int len = iterator->length;
-                                    break;
-                            }
-                        }*/
                         for (int i = headerLen + TLS_HEADER_LEN + len; i < userArgs.currentPacketSize; i++){
                             if (temp[i] == 0x14 || temp[i] == 0x15 || temp[i] == 0x16 || temp[i] == 0x17){
                                 if (temp[i+1] == 0x03){
                                     if (temp[i+2] == 0x00 || temp[i+2] == 0x02
                                         || temp[i+2] == 0x03 || temp[i+2] == 0x04){
-                                            for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                                                if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                                    ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                                    (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                                    ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){ 
-                                                                                        if(ntohs(tcph->source) == 50280 || ntohs(tcph->dest) == 50280){
-                                        int a = 1;
-                                    }       
-                                                    
-                                                    if (iterator->handshakeMade) {
-                                                        if (iterator->wasHere) iterator->wasHere = false;
-                                                        len = (ntohs(temp[i+3]) + temp[i+4]);
-                                                        iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
-                                                    }
-                                                } 
-                                            }
+                                        for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+                                            if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
+                                                ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
+                                                (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
+                                                ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){                                                      
+                                                if (iterator->handshakeMade) {
+                                                    len = (ntohs(temp[i+3]) + temp[i+4]);
+                                                    iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
+                                                }
+                                            } 
+                                        }
                                     }
                                 }
                             }
@@ -381,7 +381,6 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                         fprintf(stderr, "This protocol isn't supported in TLS.\n");
                         return EXIT_FAILURE;
                     }
-                
             } 
             break;
         case 0x14:
@@ -396,12 +395,7 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                             (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
                             ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
                             if (iterator->handshakeMade){
-                                                                    if(ntohs(tcph->source) == 50280 || ntohs(tcph->dest) == 50280){
-                                        int a = 1;
-                                    }
-                                if (iterator->wasHere) iterator->wasHere = false;
                                 iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
-                                iterator->countOfPackets += 1;
                                 len = (ntohs(Buffer[3]) + Buffer[4]);
                             }
                         }
@@ -413,21 +407,17 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                     if (temp[i+1] == 0x03){
                         if (temp[i+2] == 0x00 || temp[i+2] == 0x01 || temp[i+2] == 0x02
                             || temp[i+2] == 0x03 || temp[i+2] == 0x04){
-                                for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                                    if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                        ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                        (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                        ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-                                                                            if(ntohs(tcph->source) == 50280 || ntohs(tcph->dest) == 50280){
-                                        int a = 1;
+                            for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+                                if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
+                                    ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
+                                    (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
+                                    ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
+                                    if (iterator->handshakeMade) {
+                                        len = (ntohs(temp[i+3]) + temp[i+4]);
+                                        iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
                                     }
-                                        if (iterator->handshakeMade) {
-                                            if (iterator->wasHere) iterator->wasHere = false;
-                                            len = (ntohs(temp[i+3]) + temp[i+4]);
-                                            iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
-                                        }
-                                    } 
-                                }
+                                } 
+                            }
                         }
                     }
                 }
@@ -439,25 +429,17 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                     if (temp[i+1] == 0x03){
                         if (temp[i+2] == 0x00 || temp[i+2] == 0x01 || temp[i+2] == 0x02
                             || temp[i+2] == 0x03 || temp[i+2] == 0x04){
-                                for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                                    if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                        ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                        (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                        ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-                                                                                if(ntohs(tcph->source) == 50280 || ntohs(tcph->dest) == 50280){
-                                        int a = 1;
+                            for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+                                if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
+                                    ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
+                                    (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
+                                    ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
+                                    if (iterator->handshakeMade) {
+                                        len = (ntohs(temp[i+3]) + temp[i+4]);
+                                        iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
                                     }
-                                        
-                                        if (iterator->handshakeMade) {
-                                            len = (ntohs(temp[i+3]) + temp[i+4]);
-                                            iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
-                                            if (!iterator->wasHere || (iterator->wasHere && len > userArgs.currentPacketSize)) {
-                                                iterator->wasHere = true;
-                                                iterator->countOfPackets += 1;
-                                            }
-                                        }
-                                    } 
-                                }
+                                } 
+                            }
                         }
                     }
                 }
@@ -475,6 +457,7 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                 (getDest(temp,Size) == iterator->ipClient &&
                 ntohs(tcph->dest) == iterator->srcPort))){
                 iterator->finCount++;
+                iterator->countOfPackets++;
                 break;
             }
         } 
@@ -598,53 +581,6 @@ static int parse_server_name_extension(const uint8_t *Buffer, size_t Size, unsig
     return -2;
 }
 
-
-/* Function which prints header of IPK project and TCP packet*/
-void printTCP(const u_char* Buffer, int Size, const struct pcap_pkthdr* header) {
-
-    struct iphdr* iph = (struct iphdr*)(Buffer + sizeof(struct ethhdr));
-    unsigned short iphdrlen = iph->ihl * 4;
-    struct tcphdr* tcph = (struct tcphdr*)(Buffer + iphdrlen + sizeof(struct ethhdr));
-
-    const struct ip6_hdr* ipv6Hdr = (struct ip6_hdr*)(Buffer + sizeof(struct ethhdr));
-    unsigned short ip6hdrlen = 5 * 8;   // ipv6hdrlen
-    struct tcphdr* tcph6 = (struct tcphdr*)(Buffer + ip6hdrlen + sizeof(struct ethhdr));
-    
-    if (ipv6){
-        Size = Size - tcph6->doff * 4 - ip6hdrlen - 14;
-    } else {
-        Size = Size - tcph->doff * 4 - iphdrlen - 14;
-    }
-
-    parseTLS(Buffer, Size, header);
-    /*char finalBuf[2048];
-    if (ipv6) {
-        snprintf(finalBuf, sizeof(finalBuf), "%s %u > %s %u", buf, ntohs(tcph6->source), tempBuf, ntohs(tcph6->dest));
-        printf("%s\n\n", finalBuf);
-        int hdrlen = ip6hdrlen + 14 + tcph6->doff * 4;
-        //dataFlush(Buffer, Size, hdrlen);
-    }*/
-    //else {
-        /*if (!hostnameFound)
-            snprintf(finalBuf, sizeof(finalBuf), "%s,%u,%s,%u", buf, ntohs(tcph->source), tempBuf, ntohs(tcph->dest));
-        else {
-            snprintf(finalBuf, sizeof(finalBuf), "%s,%u,%s,%s,%u", buf, ntohs(tcph->source), tempBuf, userArgs.hostname.c_str(), ntohs(tcph->dest));
-            hostnameFound = false;
-        }
-        printf("%s\n\n", finalBuf);
-        int hdrlen = iphdrlen + 14 + tcph->doff * 4;
-        //dataFlush(Buffer, Size, hdrlen);*/
-    //}
-   /* if (connectionInfo.closed) {
-        string final = connectionInfo.timestamp + connectionInfo.ipClient + "," + to_string(connectionInfo.port) + "," + \ 
-                        connectionInfo.hostname + "," + to_string(connectionInfo.countOfPackets); 
-        printf("%s\n", final.c_str());
-        connectionInfo.closed = false;
-        connectionInfo.countOfPackets = 0;
-    }*/
-    //printf("%s", Buffer);
-}
-
 int main(int argc, char** argv){
     initStruct();
     int errCode = 0;
@@ -664,13 +600,22 @@ int main(int argc, char** argv){
         return EXIT_FAILURE;
     }
 
+    if (!userArgs.interfaceSet && !userArgs.fileSet && !userArgs.showDevices){
+        printf("SSL sniffer\n"
+               "Usage: sudo ./sslsniff [-i interface] [-r file]\n"
+               "-i interface - sniffer will listen on chosen interface\n"
+               "-r file - file in pcapng format\n"
+               "no options - shows this help\n");
+        return 1;
+    } 
+
     /*  - loop through found interfaces, if interface is matched with user
           defined interface, breaks the loop and continue in code
         - if none of interfaces match with user defined interface, error is raised
         - if user doesn't specify interface, all of system interfaces are written to
           stdout and program ends with EXIT_SUCCESS
     */
-    if (userArgs.interfaceSet){
+    if (!userArgs.fileSet) {
         for (temp = interfaces; temp; temp = temp->next) {
             if (userArgs.interfaceSet) {
                 if (strcmp(userArgs.interface, temp->name) == 0) {
@@ -695,21 +640,9 @@ int main(int argc, char** argv){
             }
         }
     }
-    /* File name: sniffer.c
-     * Author: Copyright (c) 2002 Tim Carstens
-     * Date: 2002-01-07
-     * Author's description: Demonstration of using libpcap
-     * From website: tcpdump.org/sniffex.c
-     *
-     * My commentary: All rights reserved Tim Carstens
-     *                Following fragment of code was borrowed from https://www.tcpdump.org/pcap.html ,
-     *                but it's property of Tim Carstens
-     *                Code was modified just a little for project purposes
-     */
 
-    if (userArgs.interfaceSet && userArgs.fileSet){
-
-    } else if (userArgs.interfaceSet && !userArgs.fileSet){
+    if ((userArgs.interfaceSet && userArgs.fileSet) || 
+        (userArgs.interfaceSet && !userArgs.fileSet)){
         pcap_t* dev = pcap_open_live(userArgs.interface, BUFSIZ, 0, 0, error);
         if (!dev) {
             fprintf(stderr, "Opening of device %s wasn't successful. Error: %s \n", userArgs.interface, error);
@@ -719,7 +652,7 @@ int main(int argc, char** argv){
         pcap_close(dev);
     } else if (!userArgs.interfaceSet && userArgs.fileSet){
         pcap_t* dev = pcap_open_offline(userArgs.file, error);
-       // pcap_t* dev = pcap_open_offline("/home/student/Desktop/isa/random.pcapng", error);
+        //pcap_t* dev = pcap_open_offline("/home/student/Desktop/isa/hardcore.pcapng", error);
         if (!dev) {
             fprintf(stderr, "Opening of device %s wasn't successful. Error: %s \n", userArgs.interface, error);
             return EXIT_FAILURE;
@@ -727,10 +660,5 @@ int main(int argc, char** argv){
         pcap_loop(dev, 0, processPacket, NULL);
         pcap_close(dev);
     }
-    // opening specified device for sniffing
-
-    // loop with a callback function
-    /*pcap_loop(dev, 0, processPacket, NULL);
-    pcap_close(dev);*/
     return EXIT_SUCCESS;
 }
