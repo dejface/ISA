@@ -51,7 +51,7 @@ typedef struct connectionInfo {
     long sec,usec;
     unsigned srcPort, dstPort;
     bool handshakeMadeClient, handshakeMade,dontWrite,hasHostname,finClient, finServer;
-    int countOfPackets, length, finCount, ackCount, synCount;
+    int countOfPackets, length;
 } connectionInfo;
 
 void initStruct();
