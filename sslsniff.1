@@ -1,0 +1,20 @@
+.TH sslsniff 1
+.SH NAME
+sslsniff \- simple tool for monitoring SSL connection
+.SH SYNOPSIS
+.B sudo ./sslsniff
+[\fB\-r\fR \fIFILE\fR]
+[\fB\-i\fR \fIINTERFACE\fR]
+.SH DESCRIPTION
+.B sslsniff
+tool for monitoring SSL connection either online or via file in pcapng format
+.SH OPTIONS
+.TP
+.BR \-r
+Takes \fIFILE\fR in pcapng format.
+.TP
+.BR \-i
+Starts online monitoring on \fIINTERFACE\fR.
+.TP
+no option
+Shows help.
