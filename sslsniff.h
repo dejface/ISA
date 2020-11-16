@@ -1,11 +1,3 @@
-/****************************************************************************/
-/* File: sslsniff.h
-/* Author: David Oravec (xorave05)
-/* Description:
-/*      - header file for sslsniff.cc with libraries, macros and function
-/*        prototypes
-*****************************************************************************/
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -51,7 +43,7 @@ typedef struct connectionInfo {
     long sec,usec;
     unsigned srcPort, dstPort;
     bool handshakeMadeClient, handshakeMade,dontWrite,hasHostname,finClient, finServer;
-    int countOfPackets, length;
+    int countOfPackets, length, finCount, ackCount, synCount;
 } connectionInfo;
 
 void initStruct();
@@ -65,3 +57,4 @@ void processTCP(const u_char* Buffer, int Size, const struct pcap_pkthdr* header
 static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr* header);
 static int parse_extension(const uint8_t *Buffer, const uint8_t * temp, size_t Size, unsigned srcPort, unsigned dstPort, struct tcphdr* tcph);
 static int parse_server_name_extension(const uint8_t *Buffer, const uint8_t * temp, size_t Size, unsigned srcPort, unsigned dstPort, struct tcphdr* tcph);
+bool check_connection(const u_char* temp, size_t Size, struct tcphdr* tcph);
