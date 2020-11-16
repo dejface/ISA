@@ -21,6 +21,7 @@ bool ipv6 = false;
 list<connectionInfo> listOfconn;
 connectionInfo ci;
 long secLast, usecLast;
+_List_iterator<connectionInfo> temp_iterator;
 
 
 
@@ -220,6 +221,27 @@ void endConnection(unsigned port, string lastTimestamp, struct tcphdr* tcph, con
 }
 
 /**
+ * Fuction which finds appropriate connection in list of connections, 
+ * stores iterator and returns true if success otherwise false
+ */
+bool check_connection(const u_char* temp, size_t Size, struct tcphdr* tcph){
+    for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+        if (((getSource(temp,Size) == iterator->ipClient && 
+            ntohs(tcph->source) == iterator->srcPort) &&
+            (getDest(temp,Size) == iterator->ipServer &&
+            ntohs(tcph->dest) == iterator->dstPort)) || 
+            ((getSource(temp,Size) == iterator->ipServer && 
+            ntohs(tcph->source) == iterator->dstPort) &&
+            (getDest(temp,Size) == iterator->ipClient &&
+            ntohs(tcph->dest) == iterator->srcPort))){
+                temp_iterator = iterator;
+                return true;
+            }
+    }
+    return false;
+}
+
+/**
  * Function for parsing TLS packet
  * 
  */ 
@@ -245,17 +267,8 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
     if (ipv6) tcph = tcph6;
     if (tcph->syn && !tcph->ack && !tcph->fin) { 
         // if connection is already in list of structs, counting packets
-        for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-            if (((getSource(temp,Size) == iterator->ipClient && 
-                ntohs(tcph->source) == iterator->srcPort) &&
-                (getDest(temp,Size) == iterator->ipServer &&
-                ntohs(tcph->dest) == iterator->dstPort)) || 
-                ((getSource(temp,Size) == iterator->ipServer && 
-                ntohs(tcph->source) == iterator->dstPort) &&
-                (getDest(temp,Size) == iterator->ipClient &&
-                ntohs(tcph->dest) == iterator->srcPort))){
-                    iterator->countOfPackets += 1;
-            }
+        if (check_connection(temp, Size, tcph)) {
+            temp_iterator->countOfPackets += 1;
         }
         // creating a new connetion and storing important stuff in list of structs
         ci.srcPort = ntohs(tcph->source);
@@ -271,35 +284,47 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
         listOfconn.push_back(ci);
     } else if (tcph->syn && tcph->ack && !tcph->fin){
         // if connection is already in list of structs, counting packets
-        for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-            if (((getSource(temp,Size) == iterator->ipClient && 
-                ntohs(tcph->source) == iterator->srcPort) &&
-                (getDest(temp,Size) == iterator->ipServer &&
-                ntohs(tcph->dest) == iterator->dstPort)) || 
-                ((getSource(temp,Size) == iterator->ipServer && 
-                ntohs(tcph->source) == iterator->dstPort) &&
-                (getDest(temp,Size) == iterator->ipClient &&
-                ntohs(tcph->dest) == iterator->srcPort))){
-                    iterator->countOfPackets += 1;
-
-            }
+        if (check_connection(temp, Size, tcph)) {
+            temp_iterator->countOfPackets += 1;
         }
-    } else if (!tcph->syn && tcph->ack && !tcph->fin){
+    } else if (!tcph->syn && tcph->ack && !tcph->fin && !tcph->rst){
         // if connection is already in list of structs, counting packets
-        for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-            if (((getSource(temp,Size) == iterator->ipClient && 
-                ntohs(tcph->source) == iterator->srcPort) &&
-                (getDest(temp,Size) == iterator->ipServer &&
-                ntohs(tcph->dest) == iterator->dstPort)) || 
-                ((getSource(temp,Size) == iterator->ipServer && 
-                ntohs(tcph->source) == iterator->dstPort) &&
-                (getDest(temp,Size) == iterator->ipClient &&
-                ntohs(tcph->dest) == iterator->srcPort))){
-                    iterator->countOfPackets += 1;
-            }
+        if (check_connection(temp, Size, tcph)) {
+            temp_iterator->countOfPackets += 1;
         }
     } else if (tcph->fin) {
-        ;   // for avoiding
+       if ((userArgs.currentPacketSize - headerLen) < TLS_HEADER_LEN){
+           for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
+            if (((getSource(temp,Size) == iterator->ipClient && 
+                ntohs(tcph->source) == iterator->srcPort) &&
+                (getDest(temp,Size) == iterator->ipServer &&
+                ntohs(tcph->dest) == iterator->dstPort))){
+                iterator->finClient = true;     //fin from client
+                iterator->countOfPackets += 1;
+                break;
+            }
+            else if (((getSource(temp,Size) == iterator->ipServer && 
+                ntohs(tcph->source) == iterator->dstPort) &&
+                (getDest(temp,Size) == iterator->ipClient &&
+                ntohs(tcph->dest) == iterator->srcPort))){
+                iterator->finServer = true;     //fin from server
+                iterator->countOfPackets += 1;
+                break;
+            }
+        }
+        //ending and printing connection
+        string lastTimestamp = getTimestamp(temp, Size, "last", header);
+        endConnection(ntohs(tcph->source), lastTimestamp, tcph, temp, Size);
+       }
+    } else if (tcph->rst){
+        if (check_connection(temp, Size, tcph)) {
+            temp_iterator->finClient = true;
+            temp_iterator->finServer = true;
+            temp_iterator->countOfPackets += 1;
+        }
+        string lastTimestamp = getTimestamp(temp, Size, "last", header);
+        endConnection(ntohs(tcph->source), lastTimestamp, tcph, temp, Size);
+       // return 0;
     } else {
         // if connection is already in list of structs, counting packets
         for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
@@ -319,6 +344,8 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
             }
         }
     }
+
+    if ((userArgs.currentPacketSize - headerLen) < TLS_HEADER_LEN) return 1;
 
     // check the first byte of payload
     switch (Buffer[0]){
@@ -343,55 +370,34 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                             } 
                         } else if (Buffer[5] == 0x02) { //server hello
                             // if connection is already in list of structs, confirms handshake, counting packets and length of SSL connection
-                            for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                                if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                    ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                    (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                    ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-
-                                    if (iterator->handshakeMadeClient){
-                                        iterator->handshakeMade = true;
-                                        iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
-                                        lngth = (ntohs(Buffer[3]) + Buffer[4]);
-                                    }
-                                    break;  
+                            if (check_connection(temp, Size, tcph)) {
+                                if (temp_iterator->handshakeMadeClient){
+                                    temp_iterator->handshakeMade = true;
+                                    temp_iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
+                                    lngth = (ntohs(Buffer[3]) + Buffer[4]);
                                 }
                             }
                         } else {
                             // if connection is already in list of structs, counting length of SSL connection
-                            for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                                if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                    ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                    (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                    ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-
-                                    if (iterator->handshakeMadeClient){
-                                        iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
-                                        lngth = (ntohs(Buffer[3]) + Buffer[4]);
-                                    }
-                                } 
+                            if (check_connection(temp, Size, tcph)) {
+                                if (temp_iterator->handshakeMadeClient){
+                                    temp_iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
+                                    lngth = (ntohs(Buffer[3]) + Buffer[4]);
+                                }
                             }
                         }
                         // go through the whole packet and check if another TLS headers are included
                         for (int i = lngth + headerLen + TLS_HEADER_LEN; i < userArgs.currentPacketSize; i++){
                             if (temp[i] == 0x14 || temp[i] == 0x15 || temp[i] == 0x16 || temp[i] == 0x17){
                                 if (temp[i+1] == 0x03){
-                                    if (temp[i+2] == 0x00 || temp[i+2] == 0x02
+                                    if (temp[i+2] == 0x00 || temp[i+2] == 0x01 || temp[i+2] == 0x02
                                         || temp[i+2] == 0x03 || temp[i+2] == 0x04){
-                                        for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                                            // if connection is already in list of structs, counting length of SSL connection
-                                            if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                                ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                                (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                                ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){  
-                                           
-                                                if (iterator->handshakeMadeClient) {
-                                                    lngth = (ntohs(temp[i+3]) + temp[i+4]);
-                                                    iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
-                                                    i += TLS_HEADER_LEN + lngth - 1;
-                                                    break;
-                                                }
-                                            } 
+                                        if (check_connection(temp, Size, tcph)) {
+                                            if (temp_iterator->handshakeMade){
+                                                lngth = (ntohs(temp[i+3]) + temp[i+4]);
+                                                temp_iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
+                                                i += TLS_HEADER_LEN + lngth - 1;
+                                            }
                                         }
                                     }
                                 }
@@ -410,16 +416,10 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                 if (Buffer[2] == 0x00 || Buffer[2] == 0x01 || Buffer[2] == 0x02
                     || Buffer[2] == 0x03 || Buffer[2] == 0x04) {
                     // if connection is already in list of structs, counting length of SSL connection
-                    for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                        if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                            ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                            (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                            ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-
-                            if (iterator->handshakeMadeClient){
-                                iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
-                                lngth = (ntohs(Buffer[3]) + Buffer[4]);
-                            }
+                    if (check_connection(temp, Size, tcph)) {
+                        if (temp_iterator->handshakeMade){
+                            temp_iterator->length += (ntohs(Buffer[3]) + Buffer[4]);
+                            lngth = (ntohs(Buffer[3]) + Buffer[4]);
                         }
                     }
                 } 
@@ -431,19 +431,12 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                         if (temp[i+2] == 0x00 || temp[i+2] == 0x01 || temp[i+2] == 0x02
                             || temp[i+2] == 0x03 || temp[i+2] == 0x04){
                             // if connection is already in list of structs, counting length of SSL connection
-                            for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                                if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                    ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                    (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                    ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-
-                                    if (iterator->handshakeMadeClient) {
-                                        lngth = (ntohs(temp[i+3]) + temp[i+4]);
-                                        iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
-                                        i += TLS_HEADER_LEN + lngth - 1; 
-                                        break;
-                                    }
-                                } 
+                            if (check_connection(temp, Size, tcph)) {
+                                if (temp_iterator->handshakeMade){
+                                    lngth = (ntohs(temp[i+3]) + temp[i+4]);
+                                    temp_iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
+                                    i += TLS_HEADER_LEN + lngth - 1;
+                                }
                             }
                         }
                     }
@@ -458,20 +451,12 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
                     if (temp[i+1] == 0x03){
                         if (temp[i+2] == 0x00 || temp[i+2] == 0x01 || temp[i+2] == 0x02
                             || temp[i+2] == 0x03 || temp[i+2] == 0x04){
-                            for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                                if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                                    ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                                    (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                                    ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-
-                                    if (iterator->handshakeMade) {
-                                        lngth = (ntohs(temp[i+3]) + temp[i+4]);
-                                        iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
-                                        i += TLS_HEADER_LEN + lngth - 1;
-                                        break;
-                                    } 
-                                    
-                                } 
+                            if (check_connection(temp, Size, tcph)) {
+                                if (temp_iterator->handshakeMade){
+                                    lngth = (ntohs(temp[i+3]) + temp[i+4]);
+                                    temp_iterator->length += (ntohs(temp[i+3]) + temp[i+4]);
+                                    i += TLS_HEADER_LEN + lngth - 1;
+                                }
                             }
                         }
                     }
@@ -528,13 +513,13 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
 
     /* Check we received entire TLS record length */
     if (Size < len)
-        return -1;
+        return 1;
 
     /*
      * Handshake
      */
     if (pos + 1 > Size) {
-        return -5;
+        return 1;
     }
 
     /* Skip past fixed length records:
@@ -548,30 +533,30 @@ static int parseTLS(const u_char* Buffer, size_t Size, const struct pcap_pkthdr*
 
     /* Session ID */
     if (pos + 1 > Size)
-        return -5;
+        return 1;
     len = (size_t)Buffer[pos];
     pos += 1 + len;
 
     /* Cipher Suites */
     if (pos + 2 > Size)
-        return -5;
+        return 1;
     len = ((size_t)Buffer[pos] << 8) + (size_t)Buffer[pos + 1];
     pos += 2 + len;
 
     /* Compression Methods */
     if (pos + 1 > Size)
-        return -5;
+        return 1;
     len = (size_t)Buffer[pos];
     pos += 1 + len;
 
     /* Extensions */
     if (pos + 2 > Size)
-        return -5;
+        return 1;
     len = ((size_t)Buffer[pos] << 8) + (size_t)Buffer[pos + 1];
     pos += 2;
 
     if (pos + len > Size)
-        return -5;
+        return 1;
     return parse_extension(Buffer + pos, temp, len, ntohs(tcph->source), ntohs(tcph->dest), tcph);
 
 }
@@ -591,16 +576,16 @@ static int parse_extension(const uint8_t *Buffer,const uint8_t * temp, size_t Si
             /* There can be only one extension of each type, so we break
                our state and move p to beinnging of the extension here */
             if (pos + 4 + len > Size)
-                return -5;
+                return 1;
             return parse_server_name_extension(Buffer + pos + 4, temp, len, srcPort, dstPort, tcph);
         }
         pos += 4 + len; /* Advance to the next extension header */
     }
     /* Check we ended where we expected to */
     if (pos != Size)
-        return -5;
+        return 1;
 
-    return -2;
+    return 1;
 
 }
 
@@ -613,23 +598,17 @@ static int parse_server_name_extension(const uint8_t *Buffer, const uint8_t * te
             (size_t)Buffer[pos + 2];
 
         if (pos + 3 + len > Size)
-            return -5;
+            return 1;
 
         switch (Buffer[pos]) { /* name type */
             case 0x00: /* host_name */
-                for (auto iterator = listOfconn.begin(); iterator != listOfconn.end(); iterator++){
-                     if ((getSource(temp,Size) == iterator->ipClient && getDest(temp,Size) == iterator->ipServer &&
-                        ntohs(tcph->source) == iterator->srcPort && ntohs(tcph->dest) == iterator->dstPort) || 
-                        (getSource(temp,Size) == iterator->ipServer && getDest(temp,Size) == iterator->ipClient &&
-                        ntohs(tcph->source) == iterator->dstPort && ntohs(tcph->dest) == iterator->srcPort)){
-                        if (!iterator->hasHostname){
-                            iterator->hostname = (const char *)(Buffer + pos + 3);
-                            (iterator->hostname)[len] = '\0';
-                            iterator->hasHostname = true;
-                        } else break;
-                    }
+                if (check_connection(temp, Size, tcph)){
+                    if (!temp_iterator->hasHostname){
+                            temp_iterator->hostname = (const char *)(Buffer + pos + 3);
+                            (temp_iterator->hostname)[len] = '\0';
+                            temp_iterator->hasHostname = true;
+                        }
                 }
-
                 return len;
             default:
                 ;
@@ -638,9 +617,9 @@ static int parse_server_name_extension(const uint8_t *Buffer, const uint8_t * te
     }
     /* Check we ended where we expected to */
     if (pos != Size)
-        return -5;
+        return 1;
 
-    return -2;
+    return 1;
 }
 
 int main(int argc, char** argv){
