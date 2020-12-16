@@ -8,6 +8,6 @@ Laboratorní cvičení č. 3, online forma (Ing. Bednář) - 4/4
 
 Laboratorní cvičení č. 4, online forma (Ing. Bednář) - 4/4
 
-Laboratorní cvičení č. 5, online forma (Ing. Vrána) - 
+Laboratorní cvičení č. 5, online forma (Ing. Vrána) - 4/4
 
 Projekt Monitoring SSL spojení (Dr. Grégr) - 20/20
